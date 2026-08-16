@@ -142,7 +142,7 @@ function App() {
   // =========================================================
 
   useEffect(() => {
-    fetch("http://localhost:5000/api/parking")
+    fetch("https://smartkerb-production.up.railway.app/api/parking")
       .then((response) => {
                 if (!response.ok) {
                   throw new Error("Failed to fetch parking data");
@@ -159,7 +159,7 @@ function App() {
 
               try {
                 const response = await fetch(
-                  `http://localhost:5000/api/parking/${parking.id}/availability?date=${today}`
+                  `https://smartkerb-production.up.railway.app/api/parking/${parking.id}/availability?date=${today}`
                 );
 
                 if (response.ok) {
@@ -218,7 +218,7 @@ function App() {
     const fetchAvailability = async () => {
       try {
         const response = await fetch(
-          `http://localhost:5000/api/parking/${selectedParking.id}/availability?date=${bookingDate}`
+          `https://smartkerb-production.up.railway.app/api/parking/${selectedParking.id}/availability?date=${bookingDate}`
         );
 
         const data = await response.json();
@@ -267,7 +267,7 @@ function App() {
 
     try {
       const response = await fetch(
-        "http://localhost:5000/api/auth/signup",
+        "https://smartkerb-production.up.railway.app/api/auth/signup",
         {
           method: "POST",
 
@@ -323,7 +323,7 @@ function App() {
 
     try {
       const response = await fetch(
-        "http://localhost:5000/api/auth/login",
+        "https://smartkerb-production.up.railway.app/api/auth/login",
         {
           method: "POST",
 
@@ -424,7 +424,7 @@ function App() {
 
     try {
       const response = await fetch(
-        "http://localhost:5000/api/bookings",
+        "https://smartkerb-production.up.railway.app/api/bookings",
         {
           method: "GET",
 
@@ -511,7 +511,7 @@ function App() {
 
     try {
       const response = await fetch(
-        "http://localhost:5000/api/bookings/history",
+        "https://smartkerb-production.up.railway.app/api/bookings/history",
         {
           method: "GET",
 
@@ -696,7 +696,7 @@ function App() {
       // -----------------------------------------------------
 
       const response = await fetch(
-        "http://localhost:5000/api/bookings",
+        "https://smartkerb-production.up.railway.app/api/bookings",
         {
           method: "POST",
 
@@ -928,7 +928,7 @@ function App() {
     try {
       const response =
         await fetch(
-          `http://localhost:5000/api/bookings/${bookingToCancel.bookingId}/cancel`,
+          `https://smartkerb-production.up.railway.app/api/bookings/${bookingToCancel.bookingId}/cancel`,
           {
             method: "PUT",
 
