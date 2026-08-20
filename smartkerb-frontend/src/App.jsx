@@ -74,6 +74,7 @@ const createParkingIcon = (status) => {
 };
 
 function App() {
+
   const [page, setPage] = useState("welcome");
 
   const [phone, setPhone] = useState("");
@@ -83,41 +84,74 @@ function App() {
   const [booking, setBooking] = useState(null);
 
   // =========================================================
-  // RESERVATION STATE
-  // =========================================================
-
-  const [bookingDate, setBookingDate] = useState("");
-  const [arrivalTime, setArrivalTime] = useState("10:30");
-  const [duration, setDuration] = useState("1");
-
-  // Availability for the currently selected date
-  const [selectedDateAvailability, setSelectedDateAvailability] =
-    useState(null);
-
-  const [search, setSearch] = useState("");
-
-  const [userLocation, setUserLocation] = useState(null);
-  const [locationLoading, setLocationLoading] = useState(false);
-  const [nearMeActive, setNearMeActive] = useState(false);
-
-  const [bookings, setBookings] = useState([]);
-  const [history, setHistory] = useState([]);
-
-  const [parkingSpots, setParkingSpots] = useState([]);
-
-  // =========================================================
-  // GET TODAY'S DATE
+  // DATE & TIME HELPERS
   // =========================================================
 
   const getTodayDate = () => {
     const today = new Date();
 
-    return `${today.getFullYear()}-${String(
-      today.getMonth() + 1
-    ).padStart(2, "0")}-${String(
-      today.getDate()
-    ).padStart(2, "0")}`;
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, "0");
+    const day = String(today.getDate()).padStart(2, "0");
+
+    return `${year}-${month}-${day}`;
   };
+
+  const getCurrentTime = () => {
+    const now = new Date();
+
+    const hours = String(now.getHours()).padStart(2, "0");
+    const minutes = String(now.getMinutes()).padStart(2, "0");
+
+    return `${hours}:${minutes}`;
+  };
+
+  // =========================================================
+  // RESERVATION STATE
+  // =========================================================
+
+  const [bookingDate, setBookingDate] = useState(
+    getTodayDate()
+  );
+
+  const [arrivalTime, setArrivalTime] = useState("10:30");
+
+  const [duration, setDuration] = useState("1");
+
+  const [selectedDateAvailability, setSelectedDateAvailability] =
+    useState(null);
+
+  // =========================================================
+  // SMART PARKING SESSION
+  // =========================================================
+
+  // The user's single parking session.
+  // These values are shared by Smart Recommendation,
+  // parking cards and the reservation page.
+
+  const [slotParking, setSlotParking] = useState([]);
+
+  const [slotLoading, setSlotLoading] = useState(false);
+
+  const [slotError, setSlotError] = useState("");
+
+  // =========================================================
+  // GENERAL APP STATE
+  // =========================================================
+
+  const [search, setSearch] = useState("");
+
+  const [userLocation, setUserLocation] = useState(null);
+
+  const [locationLoading, setLocationLoading] = useState(false);
+
+  const [nearMeActive, setNearMeActive] = useState(false);
+
+  const [bookings, setBookings] = useState([]);
+
+  const [history, setHistory] = useState([]);
+
+  const [parkingSpots, setParkingSpots] = useState([]);
 
   // =========================================================
   // FORMAT DATE FOR DISPLAY
@@ -138,73 +172,152 @@ function App() {
   };
 
   // =========================================================
+  // FIND PARKING FOR SELECTED TIME SLOT
+  // =========================================================
+
+  const findParkingForSlot = async () => {
+    try {
+      setSlotLoading(true);
+      setSlotError("");
+
+      const params = new URLSearchParams({
+        date: bookingDate,
+        arrivalTime,
+        duration: String(duration),
+      });
+
+      const response = await fetch(
+        `https://smartkerb-production.up.railway.app/api/parking?${params.toString()}`
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.message || "Failed to fetch parking"
+        );
+      }
+
+      setSlotParking(data);
+    } catch (error) {
+      console.error("Slot parking error:", error);
+
+      setSlotError(
+        error.message ||
+          "Unable to find parking for this time slot"
+      );
+
+      setSlotParking([]);
+    } finally {
+      setSlotLoading(false);
+    }
+  };
+
+  // =========================================================
+  // TIME SLOT OPTIONS
+  // =========================================================
+
+  const generateTimeSlots = () => {
+    const slots = [];
+
+    for (let hour = 0; hour < 24; hour++) {
+      for (let minute = 0; minute < 60; minute += 30) {
+
+        const time =
+          `${String(hour).padStart(2, "0")}:${String(
+            minute
+          ).padStart(2, "0")}`;
+
+        slots.push(time);
+      }
+    }
+
+    return slots;
+  };
+
+  const timeSlots = generateTimeSlots();
+
+  const formatTime = (time) => {
+    if (!time) return "";
+
+    const [hours, minutes] = time
+      .split(":")
+      .map(Number);
+
+    const date = new Date();
+
+    date.setHours(hours);
+    date.setMinutes(minutes);
+
+    return date.toLocaleTimeString([], {
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  };
+
+  // =========================================================
   // FETCH PARKING DATA
   // =========================================================
 
+  const fetchParkingForSession = async (
+    date = bookingDate,
+    selectedArrivalTime = arrivalTime,
+    selectedDuration = duration
+  ) => {
+    const params = new URLSearchParams({
+      date,
+      arrivalTime: selectedArrivalTime,
+      duration: String(selectedDuration),
+    });
+
+    const response = await fetch(
+      `https://smartkerb-production.up.railway.app/api/parking?${params.toString()}`
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.message || "Failed to fetch parking data");
+    }
+
+    return data;
+  };
+
+  const refreshParkingSpots = async (
+    date = bookingDate,
+    selectedArrivalTime = arrivalTime,
+    selectedDuration = duration
+  ) => {
+    try {
+      const data = await fetchParkingForSession(
+        date,
+        selectedArrivalTime,
+        selectedDuration
+      );
+
+      setParkingSpots(
+        data.map((parking) => ({
+          id: parking.id,
+          name: parking.name,
+          address: parking.address,
+          available: Number(parking.available_spots),
+          total: Number(parking.total_spots),
+          price: Number(parking.price_per_hour),
+          walk: parking.walking_time,
+          rating: Number(parking.rating),
+          status: parking.status,
+          latitude: Number(parking.latitude),
+          longitude: Number(parking.longitude),
+        }))
+      );
+    } catch (error) {
+      console.error("Error fetching parking:", error);
+    }
+  };
+
   useEffect(() => {
-    fetch("https://smartkerb-production.up.railway.app/api/parking")
-      .then((response) => {
-                if (!response.ok) {
-                  throw new Error("Failed to fetch parking data");
-                }
-
-                return response.json();
-              })
-              .then(async (data) => {
-          const today = getTodayDate();
-
-          const formattedParking = await Promise.all(
-            data.map(async (parking) => {
-              let available = Number(parking.available_spots);
-
-              try {
-                const response = await fetch(
-                  `https://smartkerb-production.up.railway.app/api/parking/${parking.id}/availability?date=${today}`
-                );
-
-                if (response.ok) {
-                  const availability = await response.json();
-
-                  available = Number(
-                    availability.availableSpots
-                  );
-                }
-              } catch (error) {
-                console.error(
-                  `Availability error for ${parking.name}:`,
-                  error
-                );
-              }
-
-              return {
-                id: parking.id,
-                name: parking.name,
-                address: parking.address,
-                available: available,
-                total: Number(parking.total_spots),
-                price: Number(parking.price_per_hour),
-                walk: parking.walking_time,
-                rating: Number(parking.rating),
-                status:
-                  available === 0
-                    ? "Full"
-                    : available <= 5
-                    ? "Limited"
-                    : "Available",
-
-                latitude: Number(parking.latitude),
-                longitude: Number(parking.longitude),
-              };
-            })
-          );
-
-          setParkingSpots(formattedParking);
-        })
-
-      .catch((error) => {
-        console.error("Error fetching parking:", error);
-      });
-  }, []);
+    refreshParkingSpots();
+  }, [bookingDate, arrivalTime, duration]);
 
   // =========================================================
   // FETCH DATE-SPECIFIC AVAILABILITY
@@ -217,8 +330,14 @@ function App() {
 
     const fetchAvailability = async () => {
       try {
+        const params = new URLSearchParams({
+          date: bookingDate,
+          arrivalTime: arrivalTime,
+          duration: String(duration),
+        });
+
         const response = await fetch(
-          `https://smartkerb-production.up.railway.app/api/parking/${selectedParking.id}/availability?date=${bookingDate}`
+          `https://smartkerb-production.up.railway.app/api/parking/${selectedParking.id}/availability?${params.toString()}`
         );
 
         const data = await response.json();
@@ -246,7 +365,7 @@ function App() {
     };
 
     fetchAvailability();
-  }, [selectedParking, bookingDate]);
+  }, [selectedParking, bookingDate, arrivalTime, duration]);
 
   // =========================================================
   // CREATE ACCOUNT
@@ -455,6 +574,8 @@ function App() {
 
           date: item.booking_date,
 
+          bookingDate: item.booking_date,
+
           arrivalTime: item.arrival_time,
 
           duration: Number(
@@ -542,6 +663,8 @@ function App() {
 
           date: item.booking_date,
 
+          bookingDate: item.booking_date,
+
           arrivalTime: item.arrival_time,
 
           duration: Number(
@@ -583,21 +706,36 @@ function App() {
   // OPEN PARKING DETAILS
   // =========================================================
 
-  const openParkingDetails = (parking) => {
-    const today = getTodayDate();
+    const openParkingDetails = async (parking) => {
+      setSelectedParking(parking);
 
-    setSelectedParking(parking);
+      setSelectedDateAvailability(null);
 
-    setBookingDate(today);
+      try {
+        const params = new URLSearchParams({
+          date: bookingDate,
+          arrivalTime: arrivalTime,
+          duration: String(duration),
+        });
 
-    setArrivalTime("10:30");
+        const response = await fetch(
+          `https://smartkerb-production.up.railway.app/api/parking/${parking.id}/availability?${params.toString()}`
+        );
 
-    setDuration("1");
+        const data = await response.json();
 
-    setSelectedDateAvailability(null);
+        if (response.ok) {
+          setSelectedDateAvailability(data);
+        }
+      } catch (error) {
+        console.error(
+          "Failed to check parking availability:",
+          error
+        );
+      }
 
-    setPage("parkingDetails");
-  };
+      setPage("parkingDetails");
+    };
 
   // =========================================================
   // RESERVE PARKING
@@ -660,7 +798,7 @@ function App() {
       ) <= 0
     ) {
       alert(
-        "No parking spots are available for the selected date."
+        "No parking spots are available for your selected time slot."
       );
 
       return;
@@ -743,82 +881,29 @@ function App() {
         return;
       }
 
-      // -----------------------------------------------------
-      // UPDATE LOCAL AVAILABILITY
-      // -----------------------------------------------------
-
-      const newAvailableSpots =
-        selectedDateAvailability
-          ? Math.max(
-              0,
-              Number(
-                selectedDateAvailability.availableSpots
-              ) - 1
-            )
-          : Math.max(
-              0,
-              Number(
-                selectedParking.available
-              ) - 1
-            );
-
-      setSelectedDateAvailability(
-        (prev) =>
-          prev
-            ? {
-                ...prev,
-
-                availableSpots:
-                  newAvailableSpots,
-              }
-            : {
-                parkingId:
-                  selectedParking.id,
-
-                date:
-                  bookingDate,
-
-                availableSpots:
-                  newAvailableSpots,
-
-                totalSpots:
-                  selectedParking.total,
-              }
+      const availabilityResponse = await fetch(
+        `https://smartkerb-production.up.railway.app/api/parking/${selectedParking.id}/availability?${new URLSearchParams({
+          date: bookingDate,
+          arrivalTime,
+          duration: String(hours),
+        }).toString()}`
       );
 
-      // -----------------------------------------------------
-      // UPDATE PARKING CARD LOCALLY
-      // -----------------------------------------------------
+      const refreshedAvailability = await availabilityResponse.json();
 
-      setParkingSpots(
-        (prev) =>
-          prev.map((parking) =>
-            parking.id ===
-            selectedParking.id
-              ? {
-                  ...parking,
+      if (!availabilityResponse.ok) {
+        throw new Error(
+          refreshedAvailability.message ||
+            "Failed to refresh parking availability"
+        );
+      }
 
-                  available:
-                    Math.max(
-                      0,
-                      Number(
-                        parking.available
-                      ) - 1
-                    ),
-                }
-              : parking
-          )
-      );
-
-      // -----------------------------------------------------
-      // UPDATE SELECTED PARKING
-      // -----------------------------------------------------
+      setSelectedDateAvailability(refreshedAvailability);
+      await refreshParkingSpots(bookingDate, arrivalTime, hours);
 
       const updatedParking = {
         ...selectedParking,
-
-        available:
-          newAvailableSpots,
+        available: Number(refreshedAvailability.availableSpots),
       };
 
       setSelectedParking(
@@ -986,59 +1071,27 @@ function App() {
         ]
       );
 
-      // -----------------------------------------------------
-      // RESTORE LOCAL PARKING COUNT
-      // -----------------------------------------------------
-
-      setParkingSpots(
-        (prev) =>
-          prev.map((parking) =>
-            parking.id ===
-            bookingToCancel.parkingId
-              ? {
-                  ...parking,
-
-                  available:
-                    Math.min(
-                      Number(
-                        parking.total
-                      ),
-                      Number(
-                        parking.available
-                      ) + 1
-                    ),
-                }
-              : parking
-          )
-      );
-
-      // -----------------------------------------------------
-      // RESTORE SELECTED DATE AVAILABILITY
-      // -----------------------------------------------------
+      await refreshParkingSpots();
 
       if (
         bookingToCancel.parkingId &&
-        bookingToCancel.date
+        bookingToCancel.bookingDate
       ) {
-        setSelectedDateAvailability(
-          (prev) =>
-            prev
-              ? {
-                  ...prev,
+        const params = new URLSearchParams({
+          date: bookingToCancel.bookingDate,
+          arrivalTime: bookingToCancel.arrivalTime,
+          duration: String(bookingToCancel.duration),
+        });
 
-                  availableSpots:
-                    Math.min(
-                      Number(
-                        prev.totalSpots
-                      ),
-
-                      Number(
-                        prev.availableSpots
-                      ) + 1
-                    ),
-                }
-              : prev
+        const availabilityResponse = await fetch(
+          `https://smartkerb-production.up.railway.app/api/parking/${bookingToCancel.parkingId}/availability?${params.toString()}`
         );
+
+        if (availabilityResponse.ok) {
+          setSelectedDateAvailability(
+            await availabilityResponse.json()
+          );
+        }
       }
 
       setBooking(null);
@@ -1205,6 +1258,121 @@ function App() {
       };
     });
 
+    // =========================================================
+    // SMART RECOMMENDATION
+    // =========================================================
+
+    const recommendationCandidates = slotParking
+      .filter(
+        (parking) =>
+          Number(parking.available_spots) > 0 &&
+          parking.status !== "Closed"
+      )
+      .map((parking) => {
+
+        const baseParking = parkingSpots.find(
+          (item) => item.id === parking.id
+        );
+
+        let distance = null;
+
+        if (
+          userLocation &&
+          baseParking &&
+          baseParking.latitude != null &&
+          baseParking.longitude != null
+        ) {
+          distance = calculateDistance(
+            userLocation.latitude,
+            userLocation.longitude,
+            baseParking.latitude,
+            baseParking.longitude
+          );
+        }
+
+        return {
+          ...parking,
+          distance,
+          available: Number(parking.available_spots),
+          price: Number(parking.price_per_hour),
+          rating: Number(parking.rating),
+          walk: parking.walking_time,
+        };
+      });
+
+    // =========================================================
+    // SMART RECOMMENDATION ENGINE
+    // =========================================================
+
+    const getRecommendationScore = (parking) => {
+      if (parking.available <= 0) {
+        return -Infinity;
+      }
+
+      let score = 0;
+
+      // -------------------------------------------------------
+      // DISTANCE — MOST IMPORTANT
+      // -------------------------------------------------------
+
+      if (parking.distance != null) {
+
+        if (parking.distance <= 1) {
+          score += 50;
+        } else if (parking.distance <= 2) {
+          score += 40;
+        } else if (parking.distance <= 5) {
+          score += 30;
+        } else if (parking.distance <= 10) {
+          score += 15;
+        }
+
+      }
+
+      // -------------------------------------------------------
+      // RATING
+      // -------------------------------------------------------
+
+      score += (parking.rating / 5) * 25;
+
+      // -------------------------------------------------------
+      // PRICE
+      // -------------------------------------------------------
+
+      if (parking.price <= 30) {
+        score += 15;
+      } else if (parking.price <= 50) {
+        score += 10;
+      } else if (parking.price <= 80) {
+        score += 5;
+      }
+
+      // -------------------------------------------------------
+      // WALKING TIME
+      // -------------------------------------------------------
+
+      const walkingText =
+        String(parking.walk || "").toLowerCase();
+
+      if (
+        walkingText.includes("1") ||
+        walkingText.includes("2")
+      ) {
+        score += 10;
+      }
+
+      return score;
+    };
+
+    const recommendedParking =
+    recommendationCandidates.length > 0
+      ? [...recommendationCandidates].sort(
+          (a, b) =>
+            getRecommendationScore(b) -
+            getRecommendationScore(a)
+        )[0]
+      : null;
+        
   // =========================================================
   // FILTER PARKING
   // =========================================================
@@ -1264,106 +1432,6 @@ function App() {
 
   const totalParkingZones =
     parkingSpots.length;
-
-  // =========================================================
-  // SMART RECOMMENDATION
-  // =========================================================
-
-  const recommendedParking =
-    parkingWithDistance
-      .filter((parking) => {
-        // Only recommend parking with available spots
-        if (Number(parking.available || 0) <= 0) {
-          return false;
-        }
-
-        // If user has activated Near Me,
-        // don't recommend something more than 10 km away.
-        if (
-          nearMeActive &&
-          parking.distance != null &&
-          parking.distance > 10
-        ) {
-          return false;
-        }
-
-        return true;
-      })
-      .map((parking) => {
-
-        // =====================================================
-        // DISTANCE SCORE
-        // =====================================================
-
-        let distanceScore = 0;
-
-        if (
-          nearMeActive &&
-          parking.distance != null
-        ) {
-          // Closer parking gets a higher score.
-          distanceScore =
-            Math.max(
-              0,
-              10 - parking.distance
-            );
-        }
-
-        // =====================================================
-        // AVAILABILITY SCORE
-        // =====================================================
-
-        const availabilityScore =
-          Math.min(
-            Number(parking.available || 0),
-            10
-          );
-
-        // =====================================================
-        // RATING SCORE
-        // =====================================================
-
-        const ratingScore =
-          Number(parking.rating || 0);
-
-        // =====================================================
-        // PRICE SCORE
-        // =====================================================
-
-        const priceScore =
-          Math.max(
-            0,
-            10 - Number(parking.price || 0) / 10
-          );
-
-        // =====================================================
-        // FINAL SMART SCORE
-        // =====================================================
-
-        const smartScore =
-          nearMeActive
-            ? (
-                distanceScore * 0.45 +
-                availabilityScore * 0.30 +
-                ratingScore * 0.15 +
-                priceScore * 0.10
-              )
-            : (
-                availabilityScore * 0.45 +
-                ratingScore * 0.25 +
-                priceScore * 0.30
-              );
-
-        return {
-          ...parking,
-          smartScore,
-        };
-      })
-      .sort(
-        (a, b) =>
-          b.smartScore -
-          a.smartScore
-      )[0];
 
   // =========================================================
   // AUTH PAGES
@@ -1894,64 +1962,274 @@ function App() {
 
           </section>
 
-          {/* RECOMMENDATION */}
+          {/* =====================================================
+              SMART RECOMMENDATION
+          ===================================================== */}
 
           <section className="smart-recommendation">
 
-            <div className="recommendation-star">
-              ✦
-            </div>
+            <div className="recommendation-header">
 
-            <div className="recommendation-content">
+              <div className="recommendation-star">
+                ✦
+              </div>
 
-              <small>
-                SMART RECOMMENDATION
-              </small>
+              <div className="recommendation-copy">
+                <small>
+                  SMART RECOMMENDATION
+                </small>
 
-              <h3>
-                {recommendedParking
-                  ? `${recommendedParking.name} is your best match`
-                  : "No parking currently available"}
-              </h3>
+                <h2>
+                  Find the best parking for you
+                </h2>
 
-              <p>
-                {recommendedParking
-                  ? nearMeActive &&
-                    recommendedParking.distance != null
-                    ? `${recommendedParking.distance.toFixed(
-                        1
-                      )} km away • ${
-                        recommendedParking.available
-                      } spots available • ₹${
-                        recommendedParking.price
-                      }/hour • ⭐ ${
-                        recommendedParking.rating
-                      }`
-                    : `${
-                        recommendedParking.available
-                      } spots available • ₹${
-                        recommendedParking.price
-                      }/hour • ⭐ ${
-                        recommendedParking.rating
-                      }`
-                  : "Please check again shortly for available parking."}
-              </p>
+                <p>
+                  Tell us when you're parking and we'll choose the best available spot.
+                </p>
+              </div>
 
             </div>
 
-            <div className="match">
+            {/* =================================================
+                PARKING SESSION
+            ================================================= */}
 
-              <strong>
-                {recommendedParking
-                  ? "BEST"
-                  : "--"}
-              </strong>
+            <div className="slot-controls">
 
-              <span>
-                Match
-              </span>
+              <div className="slot-controls-heading">
+                <span>Parking session</span>
+                <small>Set your arrival details</small>
+              </div>
+
+              {/* DATE */}
+
+              <div className="slot-field">
+
+                <label>
+                  Date
+                </label>
+
+                <input
+                  type="date"
+                  value={bookingDate}
+                  min={getTodayDate()}
+                  onChange={(e) => {
+                    setBookingDate(e.target.value);
+                    setSelectedDateAvailability(null);
+                    setSlotParking([]);
+                  }}
+                />
+
+              </div>
+
+              {/* TIME */}
+
+              <div className="slot-field">
+
+                <label>
+                  Arrival
+                </label>
+
+                <select
+                  value={arrivalTime}
+                  onChange={(e) => {
+                    setArrivalTime(e.target.value);
+                    setSelectedDateAvailability(null);
+                    setSlotParking([]);
+                  }}
+                >
+
+                  {timeSlots.map((time) => (
+                    <option
+                      key={time}
+                      value={time}
+                    >
+                      {formatTime(time)}
+                    </option>
+                  ))}
+
+                </select>
+
+              </div>
+
+
+              {/* DURATION */}
+
+              <div className="slot-field">
+
+                <label>
+                  Duration
+                </label>
+
+                <select
+                  value={duration}
+                  onChange={(e) => {
+                    setDuration(e.target.value);
+                    setSelectedDateAvailability(null);
+                    setSlotParking([]);
+                  }}
+                >
+
+                  <option value={1}>
+                    1 hour
+                  </option>
+
+                  <option value={2}>
+                    2 hours
+                  </option>
+
+                  <option value={3}>
+                    3 hours
+                  </option>
+
+                  <option value={4}>
+                    4 hours
+                  </option>
+
+                  <option value={5}>
+                    5 hours
+                  </option>
+
+                </select>
+
+              </div>
+
+
+              <button
+                className="find-parking-btn"
+                onClick={findParkingForSlot}
+                disabled={slotLoading}
+              >
+                {slotLoading
+                  ? "Finding..."
+                  : "Find Best Parking →"}
+              </button>
 
             </div>
+
+
+            {/* ERROR */}
+
+            {slotError && (
+              <div className="slot-error">
+                {slotError}
+              </div>
+            )}
+
+
+            {/* =================================================
+                RECOMMENDATION RESULT
+            ================================================= */}
+
+            {slotParking.length > 0 && (
+
+              <div className="recommendation-result">
+
+                {recommendedParking ? (
+
+                  <>
+
+                    <div className="recommendation-result-info">
+
+                      <span className="best-match-label">
+                        ✦ BEST MATCH
+                      </span>
+
+                      <h3>
+                        {recommendedParking.name}
+                      </h3>
+
+                      <p>
+                        {recommendedParking.address}
+                      </p>
+
+                      <div className="parking-meta">
+
+                        {recommendedParking.distance != null && (
+                          <span>
+                            📍 {recommendedParking.distance.toFixed(1)} km
+                          </span>
+                        )}
+
+                        <span>
+                          🅿 {recommendedParking.available} spots
+                        </span>
+
+                        <span>
+                          ₹{recommendedParking.price}/hr
+                        </span>
+
+                        <span>
+                          ⭐ {recommendedParking.rating}
+                        </span>
+                        
+                        <p className="recommendation-reason">
+                          Best match based on availability, distance, price and rating.
+                        </p>
+
+                      </div>
+
+                    </div>
+
+
+                    <button
+                      className="recommendation-book-btn"
+                      onClick={() => {
+                        const selected = {
+                          ...recommendedParking,
+
+                          id: recommendedParking.id,
+
+                          name: recommendedParking.name,
+
+                          address: recommendedParking.address,
+
+                          available:
+                            recommendedParking.available,
+
+                          total:
+                            Number(
+                              recommendedParking.total_spots
+                            ),
+
+                          price:
+                            recommendedParking.price,
+
+                          walk:
+                            recommendedParking.walk,
+
+                          rating:
+                            recommendedParking.rating,
+                        };
+
+                        openParkingDetails(selected);
+                      }}
+                    >
+                      Book Now →
+                    </button>
+
+                  </>
+
+                ) : (
+
+                  <div className="no-recommendation">
+
+                    <h3>
+                      No parking available
+                    </h3>
+
+                    <p>
+                      No parking spots are available
+                      for your selected session.
+                    </p>
+
+                  </div>
+
+                )}
+
+              </div>
+
+            )}
 
           </section>
 
@@ -2306,145 +2584,110 @@ function App() {
               <div className="reservation-section">
 
                 <h3>
-                  Select your parking details
+                  Your parking session
                 </h3>
 
                 <p>
-                  Choose your parking date,
-                  arrival time and how long
-                  you want to park.
+                  Your selected date, arrival time and duration are carried forward automatically.
                 </p>
 
                 {/* =================================================
-                    PARKING DATE
+                    SESSION SUMMARY
                 ================================================= */}
 
                 <div
                   style={{
-                    marginBottom:
-                      "20px",
-                  }}
-                >
-
-                  <label
-                    style={{
-                      display:
-                        "block",
-
-                      marginBottom:
-                        "10px",
-
-                      fontSize:
-                        "13px",
-
-                      fontWeight:
-                        "700",
-
-                      color:
-                        "#2d342f",
-                    }}
-                  >
-                    Parking date
-                  </label>
-
-                  <div className="arrival-time-box">
-
-                    <input
-                      type="date"
-                      value={
-                        bookingDate
-                      }
-                      min={
-                        getTodayDate()
-                      }
-                      onChange={(e) => {
-                        setBookingDate(
-                          e.target.value
-                        );
-
-                        setSelectedDateAvailability(
-                          null
-                        );
-                      }}
-                    />
-
-                    <span className="arrival-time-icon">
-                      📅
-                    </span>
-
-                  </div>
-
-                </div>
-
-                {/* =================================================
-                    DATE AVAILABILITY
-                ================================================= */}
-
-                <div
-                  style={{
-                    marginBottom:
-                      "20px",
-
-                    padding:
-                      "14px 16px",
-
-                    borderRadius:
-                      "12px",
-
-                    background:
-                      "#f4f7f3",
-
-                    border:
-                      "1px solid #dce5db",
+                    marginBottom: "20px",
+                    padding: "18px",
+                    borderRadius: "14px",
+                    background: "#f4f7f3",
+                    border: "1px solid #dce5db",
                   }}
                 >
 
                   <div
                     style={{
-                      fontSize:
-                        "12px",
-
-                      fontWeight:
-                        "700",
-
-                      color:
-                        "#6c756e",
-
-                      marginBottom:
-                        "5px",
+                      fontSize: "12px",
+                      fontWeight: "700",
+                      color: "#6c756e",
+                      marginBottom: "12px",
+                      letterSpacing: "0.5px",
                     }}
                   >
-                    AVAILABILITY FOR
+                    YOUR PARKING SESSION
                   </div>
 
                   <div
                     style={{
-                      fontSize:
-                        "15px",
-
-                      fontWeight:
-                        "700",
-
-                      color:
-                        "#2d342f",
+                      display: "flex",
+                      gap: "24px",
+                      flexWrap: "wrap",
                     }}
                   >
-                    {formatDisplayDate(
-                      bookingDate
-                    )}
+
+                    <div>
+                      <span
+                        style={{
+                          display: "block",
+                          fontSize: "12px",
+                          color: "#7a827b",
+                          marginBottom: "4px",
+                        }}
+                      >
+                        Date
+                      </span>
+
+                      <strong>
+                        📅 {formatDisplayDate(bookingDate)}
+                      </strong>
+                    </div>
+
+                    <div>
+                      <span
+                        style={{
+                          display: "block",
+                          fontSize: "12px",
+                          color: "#7a827b",
+                          marginBottom: "4px",
+                        }}
+                      >
+                        Arrival
+                      </span>
+
+                      <strong>
+                        🕐 {formatTime(arrivalTime)}
+                      </strong>
+                    </div>
+
+                    <div>
+                      <span
+                        style={{
+                          display: "block",
+                          fontSize: "12px",
+                          color: "#7a827b",
+                          marginBottom: "4px",
+                        }}
+                      >
+                        Duration
+                      </span>
+
+                      <strong>
+                        ⏱️ {duration}{" "}
+                        {Number(duration) === 1
+                          ? "hour"
+                          : "hours"}
+                      </strong>
+                    </div>
+
                   </div>
 
                   <div
                     style={{
-                      marginTop:
-                        "8px",
-
-                      fontSize:
-                        "14px",
-
-                      fontWeight:
-                        "600",
-
+                      marginTop: "16px",
+                      paddingTop: "14px",
+                      borderTop: "1px solid #dce5db",
+                      fontSize: "14px",
+                      fontWeight: "600",
                       color:
                         selectedDateAvailability &&
                         Number(
@@ -2456,185 +2699,10 @@ function App() {
                   >
 
                     {selectedDateAvailability
-                      ? `${selectedDateAvailability.availableSpots} of ${selectedDateAvailability.totalSpots} spots available`
+                      ? `${selectedDateAvailability.availableSpots} of ${selectedDateAvailability.totalSpots} spots available for this session`
                       : "Checking availability..."}
 
                   </div>
-
-                </div>
-
-                {/* =================================================
-                    ARRIVAL TIME
-                ================================================= */}
-
-                <div
-                  style={{
-                    marginBottom:
-                      "20px",
-                  }}
-                >
-
-                  <label
-                    style={{
-                      display:
-                        "block",
-
-                      marginBottom:
-                        "10px",
-
-                      fontSize:
-                        "13px",
-
-                      fontWeight:
-                        "700",
-
-                      color:
-                        "#2d342f",
-                    }}
-                  >
-                    Arrival time
-                  </label>
-
-                  <div className="arrival-time-box">
-
-                    <select
-                      value={
-                        arrivalTime
-                      }
-                      onChange={(e) =>
-                        setArrivalTime(
-                          e.target.value
-                        )
-                      }
-                    >
-
-                      {Array.from(
-                        {
-                          length: 48,
-                        },
-
-                        (_, i) => {
-
-                          const hour =
-                            Math.floor(
-                              i / 2
-                            );
-
-                          const minute =
-                            (i % 2) *
-                            30;
-
-                          const hourStr =
-                            hour
-                              .toString()
-                              .padStart(
-                                2,
-                                "0"
-                              );
-
-                          const minuteStr =
-                            minute
-                              .toString()
-                              .padStart(
-                                2,
-                                "0"
-                              );
-
-                          const timeStr =
-                            `${hourStr}:${minuteStr}`;
-
-                          const displayHour =
-                            hour ===
-                            0
-                              ? 12
-                              : hour >
-                                12
-                              ? hour -
-                                12
-                              : hour;
-
-                          const ampm =
-                            hour >=
-                            12
-                              ? "PM"
-                              : "AM";
-
-                          const displayTime =
-                            `${displayHour}:${minuteStr} ${ampm}`;
-
-                          return (
-                            <option
-                              key={
-                                timeStr
-                              }
-                              value={
-                                timeStr
-                              }
-                            >
-                              {
-                                displayTime
-                              }
-                            </option>
-                          );
-                        }
-                      )}
-
-                    </select>
-
-                    <span className="arrival-time-icon">
-                      🕐
-                    </span>
-
-                  </div>
-
-                </div>
-
-                {/* =================================================
-                    DURATION
-                ================================================= */}
-
-                <label className="duration-label">
-                  Parking duration
-                </label>
-
-                <div className="hours-grid">
-
-                  {[
-                    "1 hour",
-                    "2 hours",
-                    "3 hours",
-                    "4 hours",
-                    "5 hours",
-                    "6 hours",
-                  ].map((hour) => {
-
-                    const hourValue =
-                      hour.split(
-                        " "
-                      )[0];
-
-                    return (
-                      <button
-                        key={
-                          hour
-                        }
-                        type="button"
-                        className={`hour-btn ${
-                          duration ===
-                          hourValue
-                            ? "selected-hour"
-                            : ""
-                        }`}
-                        onClick={() =>
-                          setDuration(
-                            hourValue
-                          )
-                        }
-                      >
-                        {hour}
-                      </button>
-                    );
-                  })}
 
                 </div>
 
