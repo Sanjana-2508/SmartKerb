@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react";
 import "./App.css";
+import AdminApp from "./AdminApp.jsx";
+
+const API_BASE =
+  import.meta.env.VITE_API_BASE_URL ||
+  (import.meta.env.DEV
+    ? "http://localhost:5000"
+    : "https://smartkerb-production.up.railway.app");
 
 import {
   MapContainer,
@@ -79,6 +86,7 @@ function App() {
 
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
+  const [loginRole, setLoginRole] = useState("user");
 
   const [selectedParking, setSelectedParking] = useState(null);
   const [booking, setBooking] = useState(null);
@@ -187,7 +195,7 @@ function App() {
       });
 
       const response = await fetch(
-        `https://smartkerb-production.up.railway.app/api/parking?${params.toString()}`
+        `${API_BASE}/api/parking?${params.toString()}`
       );
 
       const data = await response.json();
@@ -271,7 +279,7 @@ function App() {
     });
 
     const response = await fetch(
-      `https://smartkerb-production.up.railway.app/api/parking?${params.toString()}`
+      `${API_BASE}/api/parking?${params.toString()}`
     );
 
     const data = await response.json();
@@ -337,7 +345,7 @@ function App() {
         });
 
         const response = await fetch(
-          `https://smartkerb-production.up.railway.app/api/parking/${selectedParking.id}/availability?${params.toString()}`
+          `${API_BASE}/api/parking/${selectedParking.id}/availability?${params.toString()}`
         );
 
         const data = await response.json();
@@ -386,7 +394,7 @@ function App() {
 
     try {
       const response = await fetch(
-        "https://smartkerb-production.up.railway.app/api/auth/signup",
+        `${API_BASE}/api/auth/signup`,
         {
           method: "POST",
 
@@ -442,7 +450,7 @@ function App() {
 
     try {
       const response = await fetch(
-        "https://smartkerb-production.up.railway.app/api/auth/login",
+        `${API_BASE}/api/auth/login`,
         {
           method: "POST",
 
@@ -453,6 +461,7 @@ function App() {
           body: JSON.stringify({
             phone: cleanPhone,
             password: password,
+            role: loginRole,
           }),
         }
       );
@@ -482,8 +491,13 @@ function App() {
 
       setPhone("");
       setPassword("");
+      setLoginRole("user");
 
-      setPage("dashboard");
+      setPage(
+        data.user?.role === "admin"
+          ? "adminDashboard"
+          : "dashboard"
+      );
     } catch (error) {
       console.error("Login error:", error);
 
@@ -543,7 +557,7 @@ function App() {
 
     try {
       const response = await fetch(
-        "https://smartkerb-production.up.railway.app/api/bookings",
+        `${API_BASE}/api/bookings`,
         {
           method: "GET",
 
@@ -632,7 +646,7 @@ function App() {
 
     try {
       const response = await fetch(
-        "https://smartkerb-production.up.railway.app/api/bookings/history",
+        `${API_BASE}/api/bookings/history`,
         {
           method: "GET",
 
@@ -719,7 +733,7 @@ function App() {
         });
 
         const response = await fetch(
-          `https://smartkerb-production.up.railway.app/api/parking/${parking.id}/availability?${params.toString()}`
+          `${API_BASE}/api/parking/${parking.id}/availability?${params.toString()}`
         );
 
         const data = await response.json();
@@ -834,7 +848,7 @@ function App() {
       // -----------------------------------------------------
 
       const response = await fetch(
-        "https://smartkerb-production.up.railway.app/api/bookings",
+        `${API_BASE}/api/bookings`,
         {
           method: "POST",
 
@@ -882,7 +896,7 @@ function App() {
       }
 
       const availabilityResponse = await fetch(
-        `https://smartkerb-production.up.railway.app/api/parking/${selectedParking.id}/availability?${new URLSearchParams({
+        `${API_BASE}/api/parking/${selectedParking.id}/availability?${new URLSearchParams({
           date: bookingDate,
           arrivalTime,
           duration: String(hours),
@@ -1013,7 +1027,7 @@ function App() {
     try {
       const response =
         await fetch(
-          `https://smartkerb-production.up.railway.app/api/bookings/${bookingToCancel.bookingId}/cancel`,
+          `${API_BASE}/api/bookings/${bookingToCancel.bookingId}/cancel`,
           {
             method: "PUT",
 
@@ -1084,7 +1098,7 @@ function App() {
         });
 
         const availabilityResponse = await fetch(
-          `https://smartkerb-production.up.railway.app/api/parking/${bookingToCancel.parkingId}/availability?${params.toString()}`
+          `${API_BASE}/api/parking/${bookingToCancel.parkingId}/availability?${params.toString()}`
         );
 
         if (availabilityResponse.ok) {
@@ -1596,6 +1610,29 @@ function App() {
               <div className="form-group">
 
                 <label>
+                  Login As
+                </label>
+
+                <select
+                  value={loginRole}
+                  onChange={(e) =>
+                    setLoginRole(e.target.value)
+                  }
+                >
+                  <option value="user">
+                    User
+                  </option>
+
+                  <option value="admin">
+                    Admin
+                  </option>
+                </select>
+
+              </div>
+
+              <div className="form-group">
+
+                <label>
                   Password
                 </label>
 
@@ -1739,6 +1776,15 @@ function App() {
   // =========================================================
   // MAIN APP
   // =========================================================
+
+  if (page === "adminDashboard") {
+    return (
+      <AdminApp
+        user={JSON.parse(localStorage.getItem("smartkerbUser") || "null")}
+        onLogout={logout}
+      />
+    );
+  }
 
   return (
     <div className="app">
@@ -2335,7 +2381,7 @@ function App() {
                           </strong>
 
                           <span>
-                            / {parking.total} spots
+                            / {parking.total} spots for selected slot
                           </span>
 
                         </div>
@@ -2488,7 +2534,7 @@ function App() {
                               </strong>
 
                               <span>
-                                / {parking.total} spots
+                                / {parking.total} spots for selected slot
                               </span>
 
                             </div>

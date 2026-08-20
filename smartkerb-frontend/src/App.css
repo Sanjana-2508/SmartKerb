@@ -236,7 +236,8 @@ button {
     color: #354038;
 }
 
-.form-group input {
+.form-group input,
+.form-group select {
     width: 100%;
     height: 50px;
     padding: 0 15px;
@@ -247,7 +248,12 @@ button {
     font-size: 14px;
 }
 
-.form-group input:focus {
+.form-group select {
+    appearance: auto;
+}
+
+.form-group input:focus,
+.form-group select:focus {
     border-color: #7c8e81;
     box-shadow: 0 0 0 3px rgba(124, 142, 129, 0.12);
 }
