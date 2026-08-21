@@ -9,6 +9,101 @@ dotenv.config();
 
 const app = express();
 
+const ensureNotificationTable = async () => {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      booking_id VARCHAR(32) NULL,
+      type VARCHAR(64) NOT NULL,
+      title VARCHAR(160) NOT NULL,
+      message TEXT NOT NULL,
+      is_read BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      INDEX notifications_user_created (user_id, created_at),
+      INDEX notifications_booking (user_id, booking_id),
+      UNIQUE KEY notifications_booking_type (user_id, booking_id, type)
+    )
+  `);
+
+  try {
+    await db.query("ALTER TABLE notifications ADD COLUMN booking_id VARCHAR(32) NULL AFTER user_id");
+  } catch (error) {
+    if (!error.message.includes("Duplicate column")) throw error;
+  }
+};
+
+const createNotification = async ({ userId, bookingId = null, type, title, message, connection = db }) => {
+  await connection.query(
+    `INSERT INTO notifications (user_id, booking_id, type, title, message)
+     SELECT ?, ?, ?, ?, ?
+     WHERE NOT EXISTS (
+       SELECT 1 FROM notifications
+       WHERE user_id = ? AND booking_id <=> ? AND type = ?
+     )`,
+    [userId, bookingId, type, title, message, userId, bookingId, type]
+  );
+};
+
+const getIstParts = () => {
+  const now = new Date();
+  const date = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(now);
+  const time = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Kolkata",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(now);
+  return { date, time };
+};
+
+const toComparableMinutes = (date, time) => {
+  const [year, month, day] = String(date).slice(0, 10).split("-").map(Number);
+  const [hours, minutes] = String(time).slice(0, 5).split(":").map(Number);
+  return Date.UTC(year, month - 1, day, hours, minutes) / 60000;
+};
+
+const ensureBookingReminders = async (userId) => {
+  const [rows] = await db.query(
+    `SELECT b.booking_id,
+            DATE_FORMAT(b.booking_date, '%Y-%m-%d') AS booking_date,
+            TIME_FORMAT(b.arrival_time, '%H:%i:%s') AS arrival_time,
+            TIME_FORMAT(b.end_time, '%H:%i:%s') AS end_time,
+            p.name
+     FROM bookings b INNER JOIN parking_locations p ON p.id = b.parking_id
+     WHERE b.user_id = ? AND b.status = 'Active'`,
+    [userId]
+  );
+
+  const now = getIstParts();
+  const currentMinutes = toComparableMinutes(now.date, now.time);
+
+  for (const booking of rows) {
+    const arrivalMinutes = toComparableMinutes(booking.booking_date, booking.arrival_time);
+    const endMinutes = toComparableMinutes(booking.booking_date, booking.end_time);
+
+    if (arrivalMinutes - currentMinutes >= 10 && arrivalMinutes - currentMinutes <= 20) {
+      await createNotification({
+        userId,
+        bookingId: booking.booking_id,
+        type: "arrival_reminder",
+        title: "Your parking starts soon",
+        message: `Are you still coming for your parking booking at ${booking.name}? It starts at ${String(booking.arrival_time).slice(0, 5)}.`,
+      });
+    }
+
+    if (endMinutes - currentMinutes >= 25 && endMinutes - currentMinutes <= 35) {
+      await createNotification({
+        userId,
+        bookingId: booking.booking_id,
+        type: "ending_soon",
+        title: "Your parking session is ending soon",
+        message: `Your parking booking at ${booking.name} ends at ${String(booking.end_time).slice(0, 5)}.`,
+      });
+    }
+  }
+};
+
 // =========================================================
 // MIDDLEWARE
 // =========================================================
@@ -111,6 +206,72 @@ const authenticateToken = (req, res, next) => {
     }
   );
 };
+
+app.get("/api/notifications", authenticateToken, async (req, res) => {
+  try {
+    await ensureBookingReminders(req.user.userId);
+    const [rows] = await db.query(
+      `SELECT id, booking_id, type, title, message, is_read, created_at
+       FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50`,
+      [req.user.userId]
+    );
+    res.json(rows);
+  } catch (error) {
+    console.error("Fetch notifications error:", error);
+    res.status(500).json({ message: "Failed to fetch notifications" });
+  }
+});
+
+app.put("/api/notifications/:notificationId/read", authenticateToken, async (req, res) => {
+  try {
+    const [result] = await db.query(
+      "UPDATE notifications SET is_read = TRUE WHERE id = ? AND user_id = ?",
+      [req.params.notificationId, req.user.userId]
+    );
+    if (result.affectedRows !== 1) return res.status(404).json({ message: "Notification not found" });
+    res.json({ message: "Notification marked as read" });
+  } catch (error) {
+    console.error("Mark notification read error:", error);
+    res.status(500).json({ message: "Failed to update notification" });
+  }
+});
+
+app.put("/api/notifications/read-all", authenticateToken, async (req, res) => {
+  try {
+    await db.query("UPDATE notifications SET is_read = TRUE WHERE user_id = ?", [req.user.userId]);
+    res.json({ message: "Notifications marked as read" });
+  } catch (error) {
+    console.error("Mark all notifications read error:", error);
+    res.status(500).json({ message: "Failed to update notifications" });
+  }
+});
+
+app.post("/api/notifications/:notificationId/confirm-arrival", authenticateToken, async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      `SELECT n.booking_id, p.name, b.arrival_time
+       FROM notifications n
+       INNER JOIN bookings b ON b.booking_id = n.booking_id AND b.user_id = n.user_id
+       INNER JOIN parking_locations p ON p.id = b.parking_id
+       WHERE n.id = ? AND n.user_id = ? AND n.type = 'arrival_reminder' AND b.status = 'Active'`,
+      [req.params.notificationId, req.user.userId]
+    );
+    if (rows.length === 0) return res.status(404).json({ message: "Active arrival reminder not found" });
+
+    await db.query("UPDATE notifications SET is_read = TRUE WHERE id = ? AND user_id = ?", [req.params.notificationId, req.user.userId]);
+    await createNotification({
+      userId: req.user.userId,
+      bookingId: rows[0].booking_id,
+      type: "arrival_confirmation",
+      title: "Parking still reserved",
+      message: `Great! Your parking at ${rows[0].name} is still reserved for ${String(rows[0].arrival_time).slice(0, 5)}.`,
+    });
+    res.json({ message: "Arrival confirmed" });
+  } catch (error) {
+    console.error("Confirm arrival error:", error);
+    res.status(500).json({ message: "Failed to confirm arrival" });
+  }
+});
 
 // =========================================================
 // HOME ROUTE
@@ -3198,6 +3359,19 @@ app.post(
 
       await connection.commit();
 
+      try {
+        const [locationRows] = await db.query("SELECT name FROM parking_locations WHERE id = ?", [parkingId]);
+        await createNotification({
+          userId: req.user.userId,
+          bookingId,
+          type: "booking_confirmation",
+          title: "Booking Confirmed",
+          message: `Your parking booking at ${locationRows[0]?.name || "your selected location"} is confirmed for ${bookingDate} from ${normalizedArrivalTime.slice(0, 5)} to ${endTime.slice(0, 5)}. Booking ID: ${bookingId}.`,
+        });
+      } catch (notificationError) {
+        console.error("Booking confirmation notification error:", notificationError);
+      }
+
       console.log(
         "Booking created successfully:",
         bookingId
@@ -3324,17 +3498,19 @@ app.put(
         await connection.query(
           `
           SELECT
-            id,
-            booking_id,
-            parking_id,
-            booking_date,
-            status
+            b.id,
+            b.booking_id,
+            b.parking_id,
+            b.booking_date,
+            b.status,
+            p.name
 
-          FROM bookings
+          FROM bookings b
+          INNER JOIN parking_locations p ON p.id = b.parking_id
 
-          WHERE booking_id = ?
+          WHERE b.booking_id = ?
 
-          AND user_id = ?
+          AND b.user_id = ?
 
           FOR UPDATE
           `,
@@ -3420,6 +3596,18 @@ app.put(
 
       await connection.commit();
 
+      try {
+        await createNotification({
+          userId: req.user.userId,
+          bookingId,
+          type: "booking_cancellation",
+          title: "Booking Cancelled",
+          message: `Your parking booking at ${booking.name} has been cancelled. Booking ID: ${bookingId}.`,
+        });
+      } catch (notificationError) {
+        console.error("Booking cancellation notification error:", notificationError);
+      }
+
       console.log(
         "Booking cancelled successfully:",
         bookingId
@@ -3477,18 +3665,114 @@ app.put(
 );
 
 // =========================================================
+// EXTEND ACTIVE BOOKING BY ONE 30-MINUTE SLOT
+// =========================================================
+
+app.put("/api/bookings/:bookingId/extend", authenticateToken, async (req, res) => {
+  let connection;
+
+  try {
+    const additionalDuration = Number(req.body.additionalDuration || 0.5);
+    if (additionalDuration !== 0.5) {
+      return res.status(400).json({ message: "Extensions must be 30 minutes" });
+    }
+
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    const [bookingRows] = await connection.query(
+      `SELECT b.*, p.name, p.total_spots, p.price_per_hour, p.status AS parking_status
+       FROM bookings b INNER JOIN parking_locations p ON p.id = b.parking_id
+       WHERE b.booking_id = ? AND b.user_id = ? FOR UPDATE`,
+      [req.params.bookingId, req.user.userId]
+    );
+
+    if (bookingRows.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ message: "Booking not found" });
+    }
+
+    const booking = bookingRows[0];
+    if (booking.status !== "Active" || booking.parking_status?.toLowerCase() === "closed") {
+      await connection.rollback();
+      return res.status(409).json({ message: "This booking cannot be extended" });
+    }
+
+    const now = getIstParts();
+    if (toComparableMinutes(booking.booking_date, booking.end_time) <= toComparableMinutes(now.date, now.time)) {
+      await connection.rollback();
+      return res.status(409).json({ message: "This booking has already ended" });
+    }
+
+    const [endHours, endMinutes] = String(booking.end_time).slice(0, 5).split(":").map(Number);
+    const nextEndTotal = endHours * 60 + endMinutes + 30;
+    if (nextEndTotal > 24 * 60) {
+      await connection.rollback();
+      return res.status(409).json({ message: "Parking cannot be extended beyond midnight" });
+    }
+
+    const nextEndTime = formatTime(Math.floor(nextEndTotal / 60), nextEndTotal % 60);
+    const [overlappingRows] = await connection.query(
+      `SELECT id FROM bookings
+       WHERE parking_id = ? AND booking_date = ? AND status = 'Active'
+       AND booking_id <> ? AND arrival_time < ? AND end_time > ? FOR UPDATE`,
+      [booking.parking_id, booking.booking_date, booking.booking_id, nextEndTime, booking.end_time]
+    );
+
+    if (overlappingRows.length >= Number(booking.total_spots)) {
+      await connection.rollback();
+      return res.status(409).json({ message: "Parking is not available for the next time slot.", available: false });
+    }
+
+    const updatedDuration = Number((Number(booking.duration) + 0.5).toFixed(2));
+    const updatedTotalPrice = Number((Number(booking.price_per_hour) * updatedDuration).toFixed(2));
+    await connection.query(
+      `UPDATE bookings SET end_time = ?, duration = ?, total_price = ?
+       WHERE booking_id = ? AND user_id = ? AND status = 'Active'`,
+      [nextEndTime, updatedDuration, updatedTotalPrice, booking.booking_id, req.user.userId]
+    );
+
+    await createNotification({
+      userId: req.user.userId,
+      bookingId: booking.booking_id,
+      type: "booking_extended",
+      title: "Parking Extended",
+      message: `Your parking at ${booking.name} has been extended until ${nextEndTime.slice(0, 5)}.`,
+      connection,
+    });
+    await connection.commit();
+
+    res.json({
+      message: "Parking booking extended successfully",
+      available: true,
+      booking: {
+        bookingId: booking.booking_id,
+        arrivalTime: String(booking.arrival_time).slice(0, 8),
+        endTime: nextEndTime,
+        duration: updatedDuration,
+        totalPrice: updatedTotalPrice,
+      },
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error("Extend booking error:", error);
+    res.status(500).json({ message: "Failed to extend parking booking" });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+// =========================================================
 // SERVER
 // =========================================================
 
 const PORT =
   process.env.PORT || 5000;
 
-app.listen(
-  PORT,
-  () => {
-
-    console.log(
-      `SmartKerb backend running on http://localhost:${PORT}`
-    );
-  }
-);
+ensureNotificationTable()
+  .catch((error) => console.error("Notification table setup error:", error))
+  .finally(() => {
+    app.listen(PORT, () => {
+      console.log(`SmartKerb backend running on http://localhost:${PORT}`);
+    });
+  });

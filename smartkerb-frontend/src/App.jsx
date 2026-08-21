@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import "./App.css";
 import AdminApp from "./AdminApp.jsx";
 
@@ -156,6 +156,14 @@ function App() {
   const [nearMeActive, setNearMeActive] = useState(false);
 
   const [bookings, setBookings] = useState([]);
+
+  const [notifications, setNotifications] = useState([]);
+
+  const [notificationOpen, setNotificationOpen] = useState(false);
+
+  const [notificationActionId, setNotificationActionId] = useState(null);
+
+  const notificationRef = useRef(null);
 
   const [history, setHistory] = useState([]);
 
@@ -527,6 +535,10 @@ function App() {
     setBooking(null);
 
     setBookings([]);
+
+    setNotifications([]);
+    setNotificationOpen(false);
+
     setHistory([]);
 
     setBookingDate("");
@@ -626,6 +638,110 @@ function App() {
       );
     }
   };
+
+  const fetchNotifications = async () => {
+    const token = localStorage.getItem("smartkerbToken");
+    if (!token) return;
+
+    try {
+      const response = await fetch(`${API_BASE}/api/notifications`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await response.json();
+      if (response.ok) setNotifications(data);
+    } catch (error) {
+      console.error("Error fetching notifications:", error);
+    }
+  };
+
+  const markNotificationRead = async (notificationId) => {
+    const token = localStorage.getItem("smartkerbToken");
+    if (!token) return;
+    await fetch(`${API_BASE}/api/notifications/${notificationId}/read`, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    setNotifications((items) => items.map((item) => item.id === notificationId ? { ...item, is_read: 1 } : item));
+  };
+
+  const markAllNotificationsRead = async () => {
+    const token = localStorage.getItem("smartkerbToken");
+    if (!token) return;
+    await fetch(`${API_BASE}/api/notifications/read-all`, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    setNotifications((items) => items.map((item) => ({ ...item, is_read: 1 })));
+  };
+
+  const confirmArrival = async (notification) => {
+    setNotificationActionId(notification.id);
+    try {
+      const token = localStorage.getItem("smartkerbToken");
+      const response = await fetch(`${API_BASE}/api/notifications/${notification.id}/confirm-arrival`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || "Unable to confirm arrival");
+      await fetchNotifications();
+    } catch (error) {
+      alert(error.message);
+    } finally {
+      setNotificationActionId(null);
+    }
+  };
+
+  const extendBooking = async (notification) => {
+    const bookingToExtend = bookings.find((item) => item.bookingId === notification.booking_id);
+    if (!bookingToExtend) {
+      await fetchBookings();
+      alert("Please open My Bookings and try again.");
+      return;
+    }
+
+    setNotificationActionId(notification.id);
+    try {
+      const token = localStorage.getItem("smartkerbToken");
+      const response = await fetch(`${API_BASE}/api/bookings/${bookingToExtend.bookingId}/extend`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ additionalDuration: 0.5 }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || "Parking not available for the next time slot. Please pick up your vehicle.");
+
+      const updatedBooking = { ...bookingToExtend, ...data.booking };
+      setBookings((items) => items.map((item) => item.bookingId === updatedBooking.bookingId ? updatedBooking : item));
+      setBooking((current) => current?.bookingId === updatedBooking.bookingId ? { ...current, ...updatedBooking } : current);
+      await markNotificationRead(notification.id);
+      await fetchNotifications();
+      alert(`Parking extended successfully until ${String(data.booking.endTime).slice(0, 5)}.`);
+    } catch (error) {
+      alert(error.message);
+    } finally {
+      setNotificationActionId(null);
+    }
+  };
+
+  useEffect(() => {
+    if (page === "welcome" || page === "login" || page === "signup" || page === "adminDashboard") return undefined;
+    const initialFetch = setTimeout(fetchNotifications, 0);
+    const interval = setInterval(fetchNotifications, 30000);
+    return () => {
+      clearTimeout(initialFetch);
+      clearInterval(interval);
+    };
+  }, [page]);
+
+  useEffect(() => {
+    if (!notificationOpen) return undefined;
+    const closeOnOutsideClick = (event) => {
+      if (!notificationRef.current?.contains(event.target)) setNotificationOpen(false);
+    };
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    return () => document.removeEventListener("mousedown", closeOnOutsideClick);
+  }, [notificationOpen]);
 
   // =========================================================
   // FETCH PARKING HISTORY
@@ -994,7 +1110,8 @@ function App() {
   // =========================================================
 
   const cancelBooking = async (
-    bookingToCancel = booking
+    bookingToCancel = booking,
+    onSuccess = null
   ) => {
     if (!bookingToCancel) {
       return;
@@ -1114,6 +1231,9 @@ function App() {
       alert(
         "Reservation cancelled successfully."
       );
+
+      if (onSuccess) await onSuccess();
+      await fetchNotifications();
 
       setPage("dashboard");
     } catch (error) {
@@ -1852,9 +1972,63 @@ function App() {
 
         <div className="dashboard-profile">
 
-          <span className="notification">
-            •
-          </span>
+          <div className="notification-wrapper" ref={notificationRef}>
+            <button
+              className="notification-button"
+              type="button"
+              aria-label="Open notifications"
+              aria-expanded={notificationOpen}
+              onClick={() => setNotificationOpen((open) => !open)}
+            >
+              <span aria-hidden="true">🔔</span>
+              {notifications.some((item) => !item.is_read) && (
+                <span className="notification-badge">
+                  {notifications.filter((item) => !item.is_read).length}
+                </span>
+              )}
+            </button>
+
+            {notificationOpen && (
+              <div className="notification-panel">
+                <div className="notification-panel-header">
+                  <strong>Notifications</strong>
+                  <button type="button" onClick={markAllNotificationsRead}>Mark all as read</button>
+                </div>
+
+                {notifications.length === 0 ? (
+                  <p className="notification-empty">No new notifications.</p>
+                ) : (
+                  <div className="notification-list">
+                    {notifications.map((notification) => {
+                      const linkedBooking = bookings.find((item) => item.bookingId === notification.booking_id);
+                      const isArrivalReminder = notification.type === "arrival_reminder" && linkedBooking;
+                      const isEndingReminder = notification.type === "ending_soon" && linkedBooking;
+                      return (
+                        <article className={`notification-item ${notification.is_read ? "read" : "unread"}`} key={notification.id}>
+                          <button type="button" className="notification-item-main" onClick={() => markNotificationRead(notification.id)}>
+                            <span className="notification-item-icon" aria-hidden="true">{notification.type === "booking_cancellation" ? "×" : "✓"}</span>
+                            <span>
+                              <strong>{notification.title}</strong>
+                              <span>{notification.message}</span>
+                              <small>{new Date(notification.created_at).toLocaleString("en-IN")}</small>
+                            </span>
+                          </button>
+                          {(isArrivalReminder || isEndingReminder) && (
+                            <div className="notification-actions">
+                              {isArrivalReminder && <button type="button" onClick={() => confirmArrival(notification)} disabled={notificationActionId === notification.id}>Yes, I&apos;m coming</button>}
+                              {isArrivalReminder && <button type="button" onClick={() => cancelBooking(linkedBooking, () => markNotificationRead(notification.id))} disabled={notificationActionId === notification.id}>Cancel Booking</button>}
+                              {isEndingReminder && <button type="button" onClick={() => { markNotificationRead(notification.id); alert(`Reminder noted. Please pick up your vehicle before ${String(linkedBooking.endTime || "").slice(0, 5)}.`); }} disabled={notificationActionId === notification.id}>Pick Up Vehicle</button>}
+                              {isEndingReminder && <button type="button" onClick={() => extendBooking(notification)} disabled={notificationActionId === notification.id}>{notificationActionId === notification.id ? "Checking availability..." : "Extend Parking"}</button>}
+                            </div>
+                          )}
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
 
           <div className="avatar">
             R
