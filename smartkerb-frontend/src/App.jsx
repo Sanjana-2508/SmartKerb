@@ -1498,14 +1498,24 @@ function App() {
       return score;
     };
 
+    const nearbyRecommendationCandidates =
+      nearMeActive
+        ? recommendationCandidates.filter(
+            (parking) =>
+              userLocation &&
+              parking.distance != null &&
+              parking.distance <= 10
+          )
+        : recommendationCandidates;
+
     const recommendedParking =
-    recommendationCandidates.length > 0
-      ? [...recommendationCandidates].sort(
-          (a, b) =>
-            getRecommendationScore(b) -
-            getRecommendationScore(a)
-        )[0]
-      : null;
+      nearbyRecommendationCandidates.length > 0
+        ? [...nearbyRecommendationCandidates].sort(
+            (a, b) =>
+              getRecommendationScore(b) -
+              getRecommendationScore(a)
+          )[0]
+        : null;
         
   // =========================================================
   // FILTER PARKING
@@ -1528,14 +1538,19 @@ function App() {
 
           // When Near Me is active,
           // only show parking within 10 km.
-          if (
-            nearMeActive &&
-            parking.distance != null
-          ) {
-            return parking.distance <= 10;
+          if (!nearMeActive) {
+            return true;
           }
 
-          return true;
+          if (!userLocation) {
+            return false;
+          }
+
+          if (parking.distance == null) {
+            return false;
+          }
+
+          return parking.distance <= 10;
         })
         .sort((a, b) => {
           if (
